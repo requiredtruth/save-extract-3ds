@@ -40,6 +40,8 @@ int main(void) {
     char temp[] = "/tmp/save-extract-3ds-XXXXXX";
     char root[128], backup[128], path[512];
     SaveBackupStats stats;
+    SaveBackupProfile profiles[4];
+    size_t profile_count = 0;
     const char *id1 = "11111111111111111111111111111111";
     const char *id2 = "22222222222222222222222222222222";
     assert(mkdtemp(temp));
@@ -50,6 +52,11 @@ int main(void) {
     write_text(path, "SAVE-A");
     snprintf(path, sizeof(path), "%s/%s/%s/title/00040000/00030200/data/readme.txt", root, id1, id2);
     write_text(path, "not a save");
+
+    assert(sb_find_profiles(root, profiles, 4, &profile_count) == 0);
+    assert(profile_count == 1);
+    assert(strcmp(profiles[0].id1, id1) == 0);
+    assert(strcmp(profiles[0].id2, id2) == 0);
 
     assert(sb_backup_all(root, backup, &stats, NULL, NULL) == 0);
     assert(stats.profiles_found == 1);
@@ -66,6 +73,23 @@ int main(void) {
     assert(sb_restore_all(root, backup, &stats, NULL, NULL) == 0);
     assert(stats.profiles_found == 1);
     assert(stats.files_copied == 1);
+    assert_contents(path, "SAVE-A");
+
+    /* A selected-profile backup is a fresh transaction, not a stale overlay. */
+    snprintf(path, sizeof(path), "%s/00040000/99999999/data/stale.sav", backup);
+    write_text(path, "STALE");
+    assert(sb_backup_profile(&profiles[0], backup, &stats, NULL, NULL) == 0);
+    assert(stats.titles_copied == 1);
+    snprintf(path, sizeof(path), "%s/00040000/99999999/data/stale.sav", backup);
+    assert(!exists(path));
+    snprintf(path, sizeof(path), "%s/00040000/00030100/data/00000001.sav", backup);
+    assert_contents(path, "SAVE-A");
+
+    /* A failed/empty transaction must preserve the previous good backup. */
+    snprintf(profiles[0].title_root, sizeof(profiles[0].title_root), "%s/empty/title", temp);
+    assert(sb_ensure_directory(profiles[0].title_root) == 0);
+    assert(sb_backup_profile(&profiles[0], backup, &stats, NULL, NULL) != 0);
+    snprintf(path, sizeof(path), "%s/00040000/00030100/data/00000001.sav", backup);
     assert_contents(path, "SAVE-A");
 
     printf("All save backup tests passed.\n");

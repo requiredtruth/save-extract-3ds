@@ -6,13 +6,18 @@ and restores raw Nintendo 3DS title save-data directories.
 ## What it does
 
 - Creates `sdmc:/3ds/SaveBackup` when the app starts.
+- Lets the user select the exact ID1/ID2 profile when more than one exists.
 - **Backup** scans every profile under
   `sdmc:/Nintendo 3DS/<id1>/<id2>/title/00040000`.
 - A title is backed up only when its `data` directory contains at least one
   `.sav` file (including nested directories).
 - Matching data is copied to
   `sdmc:/3ds/SaveBackup/00040000/<title-id>/data`.
-- **Restore** copies the saved `00040000` tree back into every detected
+- Backup creation is transactional: files are built in a working directory and
+  the previous good backup is retained if scanning or copying fails.
+- Each successful backup is a fresh snapshot, so deleted/stale title folders do
+  not remain in the new backup.
+- **Restore** copies the saved `00040000` tree into only the selected
   `<id1>/<id2>/title` directory and overwrites matching files.
 
 ## Important limitations

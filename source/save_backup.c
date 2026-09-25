@@ -180,6 +180,27 @@ static int copy_tree(const char *source, const char *destination, SaveBackupStat
     return result;
 }
 
+static int remove_tree(const char *path) {
+    DIR *dir;
+    struct dirent *entry;
+    char child[SB_PATH_MAX];
+    struct stat info;
+    int result = 0;
+
+    if (stat(path, &info) != 0) return errno == ENOENT ? 0 : -1;
+    if (!S_ISDIR(info.st_mode)) return remove(path);
+    dir = opendir(path);
+    if (!dir) return -1;
+    while ((entry = readdir(dir)) != NULL) {
+        if (is_dot(entry->d_name)) continue;
+        if (path_join(child, sizeof(child), path, entry->d_name) != 0 ||
+            remove_tree(child) != 0) result = -1;
+    }
+    closedir(dir);
+    if (result == 0 && remove(path) != 0) result = -1;
+    return result;
+}
+
 typedef int (*ProfileVisitor)(const char *title_root, const char *id1,
                               const char *id2, void *context);
 
@@ -221,8 +242,8 @@ typedef struct {
     void *log_context;
 } OperationContext;
 
-static int backup_profile(const char *title_root, const char *id1,
-                          const char *id2, void *opaque) {
+static int backup_profile_visitor(const char *title_root, const char *id1,
+                                  const char *id2, void *opaque) {
     OperationContext *context = (OperationContext *)opaque;
     char source_root[SB_PATH_MAX], destination_root[SB_PATH_MAX];
     char title_path[SB_PATH_MAX], data_path[SB_PATH_MAX];
@@ -262,8 +283,8 @@ static int backup_profile(const char *title_root, const char *id1,
     return result;
 }
 
-static int restore_profile(const char *title_root, const char *id1,
-                           const char *id2, void *opaque) {
+static int restore_profile_visitor(const char *title_root, const char *id1,
+                                   const char *id2, void *opaque) {
     OperationContext *context = (OperationContext *)opaque;
     char source_root[SB_PATH_MAX], destination_root[SB_PATH_MAX];
     (void)id1;
@@ -291,7 +312,7 @@ static int run_operation(const char *root, const char *backup_root,
 
 int sb_backup_all(const char *root, const char *backup_root, SaveBackupStats *stats,
                   SaveBackupLog log_fn, void *log_context) {
-    return run_operation(root, backup_root, stats, log_fn, log_context, backup_profile);
+    return run_operation(root, backup_root, stats, log_fn, log_context, backup_profile_visitor);
 }
 
 int sb_restore_all(const char *root, const char *backup_root, SaveBackupStats *stats,
@@ -303,5 +324,132 @@ int sb_restore_all(const char *root, const char *backup_root, SaveBackupStats *s
         emit(log_fn, log_context, "No 00040000 backup found.");
         return -1;
     }
-    return run_operation(root, backup_root, stats, log_fn, log_context, restore_profile);
+    return run_operation(root, backup_root, stats, log_fn, log_context, restore_profile_visitor);
+}
+
+typedef struct {
+    SaveBackupProfile *profiles;
+    size_t capacity;
+    size_t count;
+} ProfileCollector;
+
+static int collect_profile(const char *title_root, const char *id1,
+                           const char *id2, void *opaque) {
+    ProfileCollector *collector = (ProfileCollector *)opaque;
+    if (collector->count < collector->capacity) {
+        SaveBackupProfile *profile = &collector->profiles[collector->count];
+        snprintf(profile->id1, sizeof(profile->id1), "%s", id1);
+        snprintf(profile->id2, sizeof(profile->id2), "%s", id2);
+        snprintf(profile->title_root, sizeof(profile->title_root), "%s", title_root);
+    }
+    collector->count++;
+    return 0;
+}
+
+int sb_find_profiles(const char *root, SaveBackupProfile *profiles,
+                     size_t capacity, size_t *profile_count) {
+    ProfileCollector collector;
+    SaveBackupStats stats;
+    int result;
+    if (!root || !profiles || capacity == 0 || !profile_count) return -1;
+    memset(&stats, 0, sizeof(stats));
+    collector.profiles = profiles;
+    collector.capacity = capacity;
+    collector.count = 0;
+    result = visit_profiles(root, &stats, collect_profile, &collector);
+    *profile_count = collector.count;
+    return result;
+}
+
+int sb_backup_profile(const SaveBackupProfile *profile, const char *backup_root,
+                      SaveBackupStats *stats, SaveBackupLog log_fn,
+                      void *log_context) {
+    char working_root[SB_PATH_MAX], working_tree[SB_PATH_MAX];
+    char final_tree[SB_PATH_MAX], previous_tree[SB_PATH_MAX];
+    OperationContext context;
+    int had_previous = 0;
+    int result;
+
+    if (!profile || !backup_root || !stats) return -1;
+    memset(stats, 0, sizeof(*stats));
+    stats->profiles_found = 1;
+    if (sb_ensure_directory(backup_root) != 0 ||
+        path_join(working_root, sizeof(working_root), backup_root, ".working") != 0 ||
+        path_join(working_tree, sizeof(working_tree), working_root, "00040000") != 0 ||
+        path_join(final_tree, sizeof(final_tree), backup_root, "00040000") != 0 ||
+        path_join(previous_tree, sizeof(previous_tree), backup_root, "00040000.previous") != 0) {
+        stats->errors++;
+        return -1;
+    }
+
+    /* Recover the last known-good backup if power was lost during rotation. */
+    if (!is_directory(final_tree) && is_directory(previous_tree) &&
+        rename(previous_tree, final_tree) != 0) {
+        stats->errors++;
+        emit(log_fn, log_context, "Could not recover previous backup.");
+        return -1;
+    }
+    if (remove_tree(working_root) != 0 || sb_ensure_directory(working_root) != 0) {
+        stats->errors++;
+        return -1;
+    }
+
+    context.backup_root = working_root;
+    context.stats = stats;
+    context.log_fn = log_fn;
+    context.log_context = log_context;
+    result = backup_profile_visitor(profile->title_root, profile->id1,
+                                    profile->id2, &context);
+    if (result != 0 || stats->errors != 0 || stats->titles_copied == 0) {
+        if (stats->titles_copied == 0) {
+            stats->errors++;
+            emit(log_fn, log_context, "No .sav title data found; old backup kept.");
+        }
+        remove_tree(working_root);
+        return -1;
+    }
+
+    if (remove_tree(previous_tree) != 0) {
+        stats->errors++;
+        remove_tree(working_root);
+        return -1;
+    }
+    if (is_directory(final_tree)) {
+        if (rename(final_tree, previous_tree) != 0) {
+            stats->errors++;
+            remove_tree(working_root);
+            return -1;
+        }
+        had_previous = 1;
+    }
+    if (rename(working_tree, final_tree) != 0) {
+        if (had_previous) rename(previous_tree, final_tree);
+        stats->errors++;
+        remove_tree(working_root);
+        return -1;
+    }
+    remove_tree(working_root);
+    if (had_previous && remove_tree(previous_tree) != 0)
+        emit(log_fn, log_context, "Warning: old backup cleanup failed.");
+    emit(log_fn, log_context, "Backup committed safely.");
+    return 0;
+}
+
+int sb_restore_profile(const SaveBackupProfile *profile, const char *backup_root,
+                       SaveBackupStats *stats, SaveBackupLog log_fn,
+                       void *log_context) {
+    char source_root[SB_PATH_MAX], destination_root[SB_PATH_MAX];
+    if (!profile || !backup_root || !stats) return -1;
+    memset(stats, 0, sizeof(*stats));
+    stats->profiles_found = 1;
+    if (path_join(source_root, sizeof(source_root), backup_root, "00040000") != 0 ||
+        !is_directory(source_root) ||
+        path_join(destination_root, sizeof(destination_root), profile->title_root,
+                  "00040000") != 0) {
+        stats->errors++;
+        emit(log_fn, log_context, "No usable 00040000 backup found.");
+        return -1;
+    }
+    emit(log_fn, log_context, "Restoring profile %.8s...", profile->id2);
+    return copy_tree(source_root, destination_root, stats);
 }

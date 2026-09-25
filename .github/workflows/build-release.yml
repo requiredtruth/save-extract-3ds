@@ -31,19 +31,30 @@ jobs:
         with:
           name: save-extract-3ds-3dsx
           path: save-extract-3ds.3dsx
-      - name: Publish v1.0.0 release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Resolve release tag
+        id: version
+        if: startsWith(github.ref, 'refs/tags/') || contains(github.event.head_commit.message, '[release]')
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=v$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish versioned release
+        if: steps.version.outputs.tag != ''
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Save Extract 3DS ${{ github.ref_name }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Save Extract 3DS ${{ steps.version.outputs.tag }}
           body: |
-            First compiled Homebrew Launcher release.
+            Compiled and tested Homebrew Launcher release.
 
             Put `save-extract-3ds.3dsx` in `sd:/3ds/save-extract-3ds/`.
 
-            This backs up raw encrypted save data to `sd:/3ds/SaveBackup` and
-            restores it to detected Nintendo 3DS profiles.
+            Backups are written transactionally to `sd:/3ds/SaveBackup`.
+            When multiple Nintendo 3DS profiles are detected, the app asks
+            which one to back up or restore.
           files: save-extract-3ds.3dsx
           fail_on_unmatched_files: true
           overwrite_files: true

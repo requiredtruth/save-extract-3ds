@@ -6,6 +6,9 @@ TOPDIR ?= $(CURDIR)
 include $(DEVKITARM)/3ds_rules
 
 TARGET := save-extract-3ds
+APP_TITLE := Save Extract 3DS
+APP_DESCRIPTION := Safe raw save-data backup and restore
+APP_AUTHOR := requiredtruth
 BUILD := build
 SOURCES := source
 INCLUDES := include
@@ -39,6 +42,8 @@ export INCLUDE := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
                   $(foreach dir,$(LIBDIRS),-I$(dir)/include) \
                   -I$(CURDIR)/$(BUILD)
 export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
+export _3DSXDEPS := $(OUTPUT).smdh
+export _3DSXFLAGS += --smdh=$(CURDIR)/$(TARGET).smdh
 
 .PHONY: all clean test
 all: $(BUILD)
@@ -60,7 +65,7 @@ test:
 HOST_CC ?= cc
 else
 DEPENDS := $(OFILES:.o=.d)
-$(OUTPUT).3dsx: $(OUTPUT).elf
+$(OUTPUT).3dsx: $(OUTPUT).elf $(_3DSXDEPS)
 $(OUTPUT).elf: $(OFILES)
 -include $(DEPENDS)
 endif
