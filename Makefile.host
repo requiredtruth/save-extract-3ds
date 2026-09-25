@@ -1,0 +1,14 @@
+.PHONY: test clean
+
+CC ?= cc
+CFLAGS ?= -std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror -O2
+
+test: build-host/test_save_backup
+	./build-host/test_save_backup
+
+build-host/test_save_backup: source/save_backup.c tests/test_save_backup.c include/save_backup.h
+	mkdir -p build-host
+	$(CC) $(CFLAGS) -Iinclude source/save_backup.c tests/test_save_backup.c -o $@
+
+clean:
+	rm -rf build-host

@@ -1,0 +1,47 @@
+name: Build and Release 3DSX
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run host filesystem tests
+        run: make -f Makefile.host test
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    container: devkitpro/devkitarm:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build 3DSX
+        run: make
+      - name: Verify artifact
+        run: test -s save-extract-3ds.3dsx
+      - uses: actions/upload-artifact@v4
+        with:
+          name: save-extract-3ds-3dsx
+          path: save-extract-3ds.3dsx
+      - name: Publish v1.0.0 release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          name: Save Extract 3DS v1.0.0
+          body: |
+            First compiled Homebrew Launcher release.
+
+            Put `save-extract-3ds.3dsx` in `sd:/3ds/save-extract-3ds/`.
+
+            This backs up raw encrypted save data to `sd:/3ds/SaveBackup` and
+            restores it to detected Nintendo 3DS profiles.
+          files: save-extract-3ds.3dsx
+          fail_on_unmatched_files: true
+          overwrite_files: true
