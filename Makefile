@@ -17,7 +17,7 @@ ROMFS :=
 ARCH := -march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft
 CFLAGS := -g -Wall -Wextra -Werror -O2 -mword-relocations \
           -ffunction-sections $(ARCH) $(DEFINES)
-CFLAGS += $(INCLUDE) -DARM11 -D_3DS
+CFLAGS += $(INCLUDE) -D__3DS__
 CXXFLAGS := $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++11
 ASFLAGS := -g $(ARCH)
 LDFLAGS = -specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
